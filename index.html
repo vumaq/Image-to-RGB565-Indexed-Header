@@ -13,7 +13,7 @@
         <header class="mb-8 flex justify-between items-end">
             <div>
                 <h1 class="text-2xl font-bold tracking-tight text-indigo-600">PNG to Header</h1>
-                <p class="text-slate-500 text-sm italic">Local 8-bit Indexed Converter</p>
+                <p class="text-slate-500 text-sm italic">8-bit Indexed Converter</p>
             </div>
             <div class="flex flex-col items-end">
                 <label class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Key Color</label>
@@ -37,16 +37,9 @@
 
         <div id="result-area" class="mt-6 hidden">
             <div id="details" class="flex flex-wrap gap-2 mb-4 justify-center"></div>
-            
             <div class="grid grid-cols-2 gap-3">
-                <button id="copy-btn" class="bg-slate-800 hover:bg-slate-900 text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.95] flex items-center justify-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-5 h-5"><path d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" /></svg>
-                    Copy
-                </button>
-                <button id="download-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.95] flex items-center justify-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-5 h-5"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
-                    Download
-                </button>
+                <button id="copy-btn" class="bg-slate-800 hover:bg-slate-900 text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.95] flex items-center justify-center gap-2">Copy Code</button>
+                <button id="download-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.95] flex items-center justify-center gap-2">Download .h</button>
             </div>
         </div>
 
@@ -79,9 +72,7 @@
         dropZone.onclick = () => fileInput.click();
         fileInput.onchange = (e) => handleFile(e.target.files[0]);
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(n => dropZone.addEventListener(n, e => { e.preventDefault(); e.stopPropagation(); }));
-        dropZone.ondragover = () => dropZone.classList.add('border-indigo-400', 'bg-indigo-50/50');
-        dropZone.ondragleave = () => dropZone.classList.remove('border-indigo-400', 'bg-indigo-50/50');
-        dropZone.ondrop = (e) => { dropZone.classList.remove('border-indigo-400', 'bg-indigo-50/50'); handleFile(e.dataTransfer.files[0]); };
+        dropZone.ondrop = (e) => handleFile(e.dataTransfer.files[0]);
 
         function handleFile(file) {
             if (!file || file.type !== "image/png") return;
@@ -96,6 +87,7 @@
                 processCanvas.height = previewCanvas.height = h;
                 const ctx = processCanvas.getContext('2d');
                 ctx.drawImage(img, 0, 0);
+                
                 const imgData = ctx.getImageData(0, 0, w, h);
                 for (let i = 0; i < imgData.data.length; i += 4) {
                     if (imgData.data[i+3] < 255) {
@@ -103,6 +95,7 @@
                     }
                 }
                 ctx.putImageData(imgData, 0, 0);
+                
                 document.getElementById('drop-content').classList.add('hidden');
                 previewCanvas.classList.remove('hidden');
                 previewCanvas.getContext('2d').drawImage(processCanvas, 0, 0);
@@ -111,10 +104,12 @@
                     status.innerText = "Quantizing colors...";
                     const q = new RgbQuant({ colors: 256, method: 2 });
                     q.sample(processCanvas);
-                    const palette = q.palette();
-                    const indices = q.reduce(processCanvas);
+                    const palette = q.palette(); // Uint8Array [r,g,b,a, r,g,b,a...]
+                    const indices = q.reduce(processCanvas); // Uint8Array of indices
+                    
                     const colorCount = palette.length / 4;
                     finalHeader = generateHeader(w, h, palette, indices, colorCount);
+                    
                     details.innerHTML = `<span class="px-3 py-1 bg-indigo-600 text-white rounded-full text-xs font-bold">${colorCount} Colors</span><span class="px-3 py-1 bg-slate-100 text-slate-500 rounded-full text-xs font-bold">${w}x${h}px</span>`;
                     resultArea.classList.remove('hidden');
                     status.innerText = "Ready!";
@@ -124,14 +119,19 @@
         }
 
         function generateHeader(w, h, palette, indices, count) {
-            let s = `// Auto-generated Arduino Header\n// Transparency Key: ${colorPicker.value}\n#ifndef SPLASH_INDEXED_H\n#define SPLASH_INDEXED_H\n\n#include <Arduino.h>\n\n`;
-            s += `static constexpr uint16_t SPLASH_W = ${w};\nstatic constexpr uint16_t SPLASH_H = ${h};\nstatic constexpr uint16_t PALETTE_SIZE = ${count};\n\n`;
-            s += `const uint8_t epd_bitmap_Splash8[] PROGMEM = {\n`;
+            let s = `// Auto-generated 8-bit indexed graphic\n#ifndef SPLASH_INDEXED_H\n#define SPLASH_INDEXED_H\n\n#include <Arduino.h>\n\n`;
+            s += `static constexpr uint16_t SPLASH_W = ${w};\nstatic constexpr uint16_t SPLASH_H = ${h};\n\n`;
+            
+            // Generate the Bitmap Indices (matches Python format)
+            s += `const uint8_t epd_bitmap_Splash8[] PROGMEM = {\n    `;
             for (let i = 0; i < indices.length; i++) {
-                s += indices[i] + (i === indices.length - 1 ? "" : ",");
-                if ((i + 1) % w === 0) s += "\n";
+                s += indices[i] + (i === indices.length - 1 ? "" : ", ");
+                if ((i + 1) % 16 === 0) s += "\n    ";
             }
-            s += `};\n\nconst uint16_t epd_palette_Splash[${count}] PROGMEM = {\n    `;
+            s += `\n};\n\n`;
+
+            // Generate the Palette (RGB565)
+            s += `const uint16_t epd_palette_Splash[${count}] PROGMEM = {\n    `;
             for (let i = 0; i < count; i++) {
                 const r = palette[i*4], g = palette[i*4+1], b = palette[i*4+2];
                 const rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
@@ -151,9 +151,9 @@
 
         copyBtn.onclick = () => {
             navigator.clipboard.writeText(finalHeader).then(() => {
-                const originalText = copyBtn.innerHTML;
+                const originalText = copyBtn.innerText;
                 copyBtn.innerText = "Copied!";
-                setTimeout(() => copyBtn.innerHTML = originalText, 2000);
+                setTimeout(() => copyBtn.innerText = originalText, 2000);
             });
         };
     </script>
