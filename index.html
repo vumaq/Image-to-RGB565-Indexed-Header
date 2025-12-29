@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PNG to Header | Multi-threaded</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/rgbquant/1.1.2/src/rgbquant.min.js"></script>
+</head>
+<body class="bg-slate-50 min-h-screen flex items-center justify-center p-6 text-slate-800">
+
+    <div class="max-w-xl w-full bg-white rounded-2xl shadow-xl p-8">
+        <header class="mb-8 flex justify-between items-end">
+            <div>
+                <h1 class="text-2xl font-bold tracking-tight">PNG to Header</h1>
+                <p class="text-slate-500 text-sm">Background Thread Processing</p>
+            </div>
+            <div class="flex flex-col items-end">
+                <label class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Key Color</label>
+                <div class="flex items-center gap-2 bg-slate-100 p-1.5 rounded-lg border border-slate-200">
+                    <input type="color" id="key-color" value="#FF69B4" class="w-6 h-6 rounded cursor-pointer bg-transparent">
+                    <span id="hex-label" class="font-mono text-xs font-bold uppercase pr-1">#FF69B4</span>
+                </div>
+            </div>
+        </header>
+
+        <div id="drop-zone" class="relative group border-2 border-dashed border-slate-200 rounded-2xl p-4 transition-all hover:border-indigo-400 hover:bg-indigo-50/50 cursor-pointer text-center">
+            <input type="file" id="file-input" accept="image/png" class="hidden">
+            
+            <div id="drop-content" class="py-10">
+                <div class="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4 transition-transform group-hover:scale-110">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-8 h-8"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg>
+                </div>
+                <p class="font-semibold">Drop PNG here</p>
+            </div>
+
+            <canvas id="preview-canvas" class="hidden mx-auto rounded-lg shadow-inner max-h-64 border border-slate-200 bg-white" style="background-image: repeating-conic-gradient(#f8f8f8 0% 25%, #fff 0% 50%) 50% / 20px 20px;"></canvas>
+        </div>
+
+        <div id="result-area" class="mt-6 hidden">
+            <div id="details" class="flex flex-wrap gap-2 mb-4 justify-center"></div>
+            <button id="download-btn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.98]">
+                Download .h File
+            </button>
+        </div>
+
+        <div id="status" class="mt-6 text-center text-sm text-slate-400 font-medium">Ready</div>
+    </div>
+
+    <canvas id="hidden-process-canvas" class="hidden"></canvas>
+
+    <script>
+        // --- WORKER SCRIPT SETUP ---
+        // This code runs in a separate background thread
+        const workerCode = `
+            importScripts('https://cdnjs.cloudflare.com/ajax/libs/rgbquant/1.1.2/src/rgbquant.min.js');
+
+            self.onmessage = function(e) {
+                const { imgData, w, h, keyHex } = e.data;
+                
+                // 1. Quantize
+                const q = new RgbQuant({ colors: 256, method: 2 });
+                q.sample(imgData);
+                const palette = q.palette();
+                const indices = q.reduce(imgData);
+                const colorCount = palette.length / 4;
+
+                // 2. Build Header String
+                let s = "// Auto-generated\\n// Key: " + keyHex + "\\n#ifndef SPLASH_INDEXED_H\\n#define SPLASH_INDEXED_H\\n\\n#include <Arduino.h>\\n\\n";
+                s += "static constexpr uint16_t SPLASH_W = " + w + ";\\n";
+                s += "static constexpr uint16_t SPLASH_H = " + h + ";\\n";
+                s += "static constexpr uint16_t PALETTE_SIZE = " + colorCount + ";\\n\\n";
+                
+                s += "const uint8_t epd_bitmap_Splash8[] PROGMEM = {\\n";
+                for (let i = 0; i < indices.length; i++) {
+                    s += indices[i] + (i === indices.length - 1 ? "" : ",");
+                    if ((i + 1) % w === 0) s += "\\n";
+                }
+                s += "};\\n\\nconst uint16_t epd_palette_Splash[" + colorCount + "] PROGMEM = {\\n    ";
+                
+                for (let i = 0; i < colorCount; i++) {
+                    const r = palette[i*4], g = palette[i*4+1], b = palette[i*4+2];
+                    const rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+                    s += "0x" + rgb565.toString(16).toUpperCase().padStart(4, '0') + (i === colorCount-1 ? '' : ', ');
+                    if ((i + 1) % 8 === 0) s += "\\n    ";
+                }
+                s += "\\n};\\n\\n#endif";
+
+                self.postMessage({ header: s, colorCount });
+            };
+        `;
+
+        const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+        const worker = new Worker(URL.createObjectURL(workerBlob));
+
+        // --- MAIN UI LOGIC ---
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const colorPicker = document.getElementById('key-color');
+        const hexLabel = document.getElementById('hex-label');
+        const status = document.getElementById('status');
+        const details = document.getElementById('details');
+        const resultArea = document.getElementById('result-area');
+        const downloadBtn = document.getElementById('download-btn');
+        const previewCanvas = document.getElementById('preview-canvas');
+        const processCanvas = document.getElementById('hidden-process-canvas');
+        
+        let finalHeader = "";
+
+        colorPicker.oninput = (e) => hexLabel.innerText = e.target.value.toUpperCase();
+
+        const hexToRgb = (hex) => ({
+            r: parseInt(hex.slice(1, 3), 16), g: parseInt(hex.slice(3, 5), 16), b: parseInt(hex.slice(5, 7), 16)
+        });
+
+        dropZone.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => handleFile(e.target.files[0]);
+        dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('border-indigo-400', 'bg-indigo-50/50'); };
+        dropZone.ondragleave = () => dropZone.classList.remove('border-indigo-400', 'bg-indigo-50/50');
+        dropZone.ondrop = (e) => { e.preventDefault(); dropZone.classList.remove('border-indigo-400', 'bg-indigo-50/50'); handleFile(e.dataTransfer.files[0]); };
+
+        function handleFile(file) {
+            if (!file || file.type !== "image/png") return;
+            resultArea.classList.add('hidden');
+            status.innerText = "Reading PNG...";
+            
+            const img = new Image();
+            img.onload = () => {
+                const w = img.width, h = img.height;
+                const key = hexToRgb(colorPicker.value);
+                
+                processCanvas.width = previewCanvas.width = w;
+                processCanvas.height = previewCanvas.height = h;
+                
+                const ctx = processCanvas.getContext('2d');
+                ctx.clearRect(0,0,w,h);
+                ctx.drawImage(img, 0, 0);
+                
+                const imgData = ctx.getImageData(0, 0, w, h);
+                for (let i = 0; i < imgData.data.length; i += 4) {
+                    if (imgData.data[i+3] < 255) {
+                        imgData.data[i]=key.r; imgData.data[i+1]=key.g; imgData.data[i+2]=key.b; imgData.data[i+3]=255;
+                    }
+                }
+                ctx.putImageData(imgData, 0, 0);
+
+                // Update Preview UI
+                document.getElementById('drop-content').classList.add('hidden');
+                previewCanvas.classList.remove('hidden');
+                previewCanvas.getContext('2d').drawImage(processCanvas, 0, 0);
+                
+                status.innerText = "Background thread quantizing...";
+
+                // Send to Worker
+                worker.postMessage({ imgData, w, h, keyHex: colorPicker.value });
+            };
+            img.src = URL.createObjectURL(file);
+        }
+
+        worker.onmessage = function(e) {
+            finalHeader = e.data.header;
+            details.innerHTML = `<span class="px-3 py-1 bg-indigo-600 text-white rounded-full text-xs font-bold">${e.data.colorCount} Colors</span>`;
+            resultArea.classList.remove('hidden');
+            status.innerText = "Conversion Finished.";
+        };
+
+        downloadBtn.onclick = () => {
+            const blob = new Blob([finalHeader], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'splash_indexed.h'; a.click();
+        };
+    </script>
+</body>
+</html>
