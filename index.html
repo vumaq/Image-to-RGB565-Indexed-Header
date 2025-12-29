@@ -7,13 +7,13 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/rgbquant@1.1.2/src/rgbquant.min.js"></script>
 </head>
-<body class="bg-slate-50 min-h-screen flex items-center justify-center p-6 text-slate-800">
+<body class="bg-slate-50 min-h-screen flex items-center justify-center p-6 text-slate-800 font-sans">
 
     <div class="max-w-xl w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
         <header class="mb-8 flex justify-between items-end">
             <div>
-                <h1 class="text-2xl font-bold tracking-tight text-indigo-600">PNG to Header</h1>
-                <p class="text-slate-500 text-sm italic">8-bit Indexed Converter</p>
+                <h1 class="text-2xl font-bold tracking-tight text-indigo-600">BitBrush</h1>
+                <p class="text-slate-500 text-sm">Indexed 8-bit Image Converter</p>
             </div>
             <div class="flex flex-col items-end">
                 <label class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Key Color</label>
@@ -38,8 +38,8 @@
         <div id="result-area" class="mt-6 hidden">
             <div id="details" class="flex flex-wrap gap-2 mb-4 justify-center"></div>
             <div class="grid grid-cols-2 gap-3">
-                <button id="copy-btn" class="bg-slate-800 hover:bg-slate-900 text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.95] flex items-center justify-center gap-2">Copy Code</button>
-                <button id="download-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.95] flex items-center justify-center gap-2">Download .h</button>
+                <button id="copy-btn" class="bg-slate-800 hover:bg-slate-900 text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.95]">Copy Header</button>
+                <button id="download-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.95]">Download .h</button>
             </div>
         </div>
 
@@ -77,7 +77,7 @@
         function handleFile(file) {
             if (!file || file.type !== "image/png") return;
             resultArea.classList.add('hidden');
-            status.innerText = "Processing pixels...";
+            status.innerText = "Preprocessing image...";
             
             const img = new Image();
             img.onload = () => {
@@ -101,19 +101,20 @@
                 previewCanvas.getContext('2d').drawImage(processCanvas, 0, 0);
                 
                 setTimeout(() => {
-                    status.innerText = "Quantizing colors...";
+                    status.innerText = "Quantizing to 8-bit palette...";
                     const q = new RgbQuant({ colors: 256, method: 2 });
                     q.sample(processCanvas);
-                    const palette = q.palette(); // Uint8Array [r,g,b,a, r,g,b,a...]
-                    const indices = q.reduce(processCanvas); // Uint8Array of indices
+                    
+                    const palette = q.palette(); // This is the RGB palette
+                    const indices = q.reduce(processCanvas); // This is the 1-byte-per-pixel array
                     
                     const colorCount = palette.length / 4;
                     finalHeader = generateHeader(w, h, palette, indices, colorCount);
                     
-                    details.innerHTML = `<span class="px-3 py-1 bg-indigo-600 text-white rounded-full text-xs font-bold">${colorCount} Colors</span><span class="px-3 py-1 bg-slate-100 text-slate-500 rounded-full text-xs font-bold">${w}x${h}px</span>`;
+                    details.innerHTML = `<span class="px-3 py-1 bg-indigo-600 text-white rounded-full text-xs font-bold tracking-tight">${colorCount} Colors</span><span class="px-3 py-1 bg-slate-100 text-slate-500 rounded-full text-xs font-bold">${w}x${h}px</span>`;
                     resultArea.classList.remove('hidden');
-                    status.innerText = "Ready!";
-                }, 50);
+                    status.innerText = "Header generated successfully!";
+                }, 100);
             };
             img.src = URL.createObjectURL(file);
         }
@@ -122,7 +123,7 @@
             let s = `// Auto-generated 8-bit indexed graphic\n#ifndef SPLASH_INDEXED_H\n#define SPLASH_INDEXED_H\n\n#include <Arduino.h>\n\n`;
             s += `static constexpr uint16_t SPLASH_W = ${w};\nstatic constexpr uint16_t SPLASH_H = ${h};\n\n`;
             
-            // Generate the Bitmap Indices (matches Python format)
+            // BITMAP DATA (1 byte per pixel)
             s += `const uint8_t epd_bitmap_Splash8[] PROGMEM = {\n    `;
             for (let i = 0; i < indices.length; i++) {
                 s += indices[i] + (i === indices.length - 1 ? "" : ", ");
@@ -130,10 +131,11 @@
             }
             s += `\n};\n\n`;
 
-            // Generate the Palette (RGB565)
+            // PALETTE DATA (RGB565)
             s += `const uint16_t epd_palette_Splash[${count}] PROGMEM = {\n    `;
             for (let i = 0; i < count; i++) {
                 const r = palette[i*4], g = palette[i*4+1], b = palette[i*4+2];
+                // Convert to RGB565 format
                 const rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
                 s += `0x${rgb565.toString(16).toUpperCase().padStart(4, '0')}${i === count-1 ? '' : ', '}`;
                 if ((i + 1) % 8 === 0) s += "\n    ";
