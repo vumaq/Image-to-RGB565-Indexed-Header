@@ -51,7 +51,7 @@
         <div class="h-full w-full grid grid-cols-4 gap-4 items-center">
             <div class="flex flex-col justify-center bg-slate-900 px-6 h-16 rounded-xl border border-slate-700">
                 <label class="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Target Palette Size</label>
-                <input type="number" id="pal-limit" value="256" min="2" max="256" 
+                <input type="number" id="pal-limit" value="256" min="1" max="256" 
                     class="bg-transparent text-indigo-400 font-bold text-lg focus:outline-none">
             </div>
 
@@ -93,7 +93,7 @@
                 }
             }
 
-            const qColors = hasTransparency ? Math.max(1, actualTarget - 1) : actualTarget;
+            const qColors = hasTransparency ? Math.max(1, actualTarget - 1) : Math.max(1, actualTarget);
             const q = new RgbQuant({ colors: qColors, method: 2, sample: 1 });
             q.sample(imgData);
             
@@ -116,7 +116,7 @@
 
             const count = finalPalette.length / 4;
 
-            let header = `/* Generated Adaptive 8-Bit Indexed Data */\n#ifndef BITMAP_DATA_H\n#define BITMAP_DATA_H\n#include <stdint.h>\n\n`;
+            let header = `/* Generated 8-Bit Indexed Data */\n#ifndef BITMAP_DATA_H\n#define BITMAP_DATA_H\n#include <stdint.h>\n\n`;
             header += `static constexpr uint16_t GFX_W = ${imgData.width};\n`;
             header += `static constexpr uint16_t GFX_H = ${imgData.height};\n`;
             header += `static constexpr uint16_t PALETTE_SIZE = ${count};\n\n`;
@@ -160,31 +160,27 @@
         const btnSublabel = document.getElementById('btn-sublabel');
 
         let originalImg = null, processedData = null, isViewOriginal = false, finalHeader = "", downloadName = "image";
-        let stateLock = false;
-        let isInitialLoad = false; // Tracker for file drops
+        let isInitialLoad = false;
+        let currentImgSourceColors = 256;
 
         const worker = new Worker(URL.createObjectURL(new Blob([document.getElementById('worker-script').textContent], { type: 'text/javascript' })));
 
         function setBtnState(state) {
             switch(state) {
                 case 'processing':
-                    stateLock = true;
                     downloadBtn.classList.add('opacity-50', 'pointer-events-none');
                     btnSublabel.innerText = "System";
                     btnLabel.innerText = "Processing...";
                     break;
-                case 'ready':
-                    setTimeout(() => {
-                        stateLock = false;
-                        downloadBtn.classList.remove('opacity-50', 'pointer-events-none');
-                        btnSublabel.innerText = "Export";
-                        btnLabel.innerText = "Download .h";
-                    }, 500); 
-                    break;
                 case 'success':
                     btnSublabel.innerText = "Saved";
                     btnLabel.innerText = "File Exported!";
-                    setTimeout(() => setBtnState('ready'), 2000);
+                    setTimeout(() => setBtnState('idle'), 2000);
+                    break;
+                case 'idle':
+                    downloadBtn.classList.remove('opacity-50', 'pointer-events-none');
+                    btnSublabel.innerText = "Export";
+                    btnLabel.innerText = "Download .h";
                     break;
             }
         }
@@ -206,17 +202,13 @@
             
             document.getElementById('info-final-colors').innerText = e.data.colorCount;
             
-            // If we just dropped a file OR if the user hasn't manually focused the input,
-            // update the input value to show actual export colors.
             if (isInitialLoad || document.activeElement !== palLimitInput) {
+                palLimitInput.max = Math.min(256, currentImgSourceColors);
                 palLimitInput.value = e.data.colorCount;
-                palLimitInput.max = Math.min(256, e.data.colorCount);
-                isInitialLoad = false; // Reset flag
+                isInitialLoad = false; 
             }
             
-            setBtnState('ready');
-            ['summary-bar', 'action-bar', 'preview-canvas'].forEach(id => document.getElementById(id).classList.remove('hidden'));
-            document.getElementById('drop-content').classList.add('hidden');
+            setBtnState('idle');
             renderView();
         };
 
@@ -236,13 +228,21 @@
 
         function handleFile(file) {
             if (!file?.type.startsWith('image/')) return;
+
+            // --- IMMEDIATE UI UPDATE ---
+            // Show bars and canvas right now, even before quantization starts
+            ['summary-bar', 'action-bar', 'preview-canvas'].forEach(id => document.getElementById(id).classList.remove('hidden'));
+            document.getElementById('drop-content').classList.add('hidden');
+            
             downloadName = file.name.split('.')[0].replace(/[^a-z0-9]/gi, '_');
             document.getElementById('info-filename').innerText = file.name;
+
             const img = new Image();
             img.onload = () => { 
                 originalImg = img; 
-                isInitialLoad = true; // Flag that this is a fresh file
-                palLimitInput.value = 256; // Reset to max before processing fresh file
+                isInitialLoad = true;
+                palLimitInput.max = 256; 
+                palLimitInput.value = 256; 
                 processImage(img); 
             };
             img.src = URL.createObjectURL(file);
@@ -258,31 +258,37 @@
             const ctx = previewCanvas.getContext('2d');
             ctx.clearRect(0, 0, w, h);
             ctx.drawImage(img, 0, 0);
+            
+            // Draw original immediately so user sees SOMETHING while worker is thinking
+            if (isInitialLoad) {
+                renderView(); 
+            }
+
             const imageDataObj = ctx.getImageData(0, 0, w, h);
             
             const colors = new Set();
             for (let i = 0; i < imageDataObj.data.length; i += 4) {
                 colors.add((imageDataObj.data[i] << 16) | (imageDataObj.data[i+1] << 8) | imageDataObj.data[i+2]);
             }
-            const sourceColorCount = colors.size;
-            document.getElementById('info-source-colors').innerText = sourceColorCount.toLocaleString();
+            currentImgSourceColors = colors.size;
+            document.getElementById('info-source-colors').innerText = currentImgSourceColors.toLocaleString();
             
             worker.postMessage({ 
                 imgData: imageDataObj, 
                 maxLimit: palLimitInput.value, 
-                sourceColorCount: sourceColorCount,
+                sourceColorCount: currentImgSourceColors,
                 downloadName,
                 rawAlphaValue: alphaInput.value 
             });
         }
 
         function renderView() {
-            if (!processedData) return;
             const ctx = previewCanvas.getContext('2d');
             ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
             
-            if (isViewOriginal) { 
-                ctx.drawImage(originalImg, 0, 0); 
+            // If view is original OR if we haven't finished processing the worker yet
+            if (isViewOriginal || !processedData) { 
+                if (originalImg) ctx.drawImage(originalImg, 0, 0); 
             } else {
                 const imgData = ctx.createImageData(previewCanvas.width, previewCanvas.height);
                 for(let i=0; i < processedData.indices.length; i++) {
@@ -303,7 +309,6 @@
         };
 
         downloadBtn.onclick = () => {
-            if(stateLock) return;
             const a = document.createElement('a');
             a.href = URL.createObjectURL(new Blob([finalHeader], { type: 'text/plain' }));
             a.download = `${downloadName}.h`;
