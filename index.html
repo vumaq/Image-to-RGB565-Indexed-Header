@@ -16,7 +16,7 @@
             background-position: 0 0, 0 20px, 20px -20px, -20px 0px;
             background-color: #0f172a;
         }
-        canvas { max-width: 90vw; max-height: 100%; object-fit: contain; image-rendering: pixelated; }
+        canvas { max-width: 90vw; max-height: 100%; object-fit: contain; image-rendering: pixelated; flex-shrink: 1; }
         #drop-icon { transition: transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
         body.drag-active #drop-icon { transform: scale(2.5); color: #818cf8; }
     </style>
@@ -38,7 +38,7 @@
         <canvas id="preview-canvas" class="hidden shadow-2xl border border-slate-700/50 z-20"></canvas>
     </main>
 
-    <div id="summary-bar" class="hidden h-14 bg-slate-900/95 border-t border-slate-800 px-8 z-30 backdrop-blur-sm">
+    <div id="summary-bar" class="h-14 bg-slate-900/95 border-t border-slate-800 px-8 z-30 backdrop-blur-sm">
         <div class="h-full w-full flex items-center gap-10 text-[10px] font-bold uppercase tracking-widest">
             <div class="flex flex-col"><span class="text-slate-500 mb-0.5">File</span><span id="info-filename" class="text-slate-200">-</span></div>
             <div class="flex flex-col"><span class="text-slate-500 mb-0.5">Resolution</span><span id="info-res" class="text-slate-200">-</span></div>
@@ -47,7 +47,7 @@
         </div>
     </div>
 
-    <nav id="action-bar" class="hidden h-28 bg-slate-950 border-t border-slate-800 px-8 z-30">
+    <nav id="action-bar" class="h-28 bg-slate-950 border-t border-slate-800 px-8 z-30">
         <div class="h-full w-full grid grid-cols-4 gap-4 items-center">
             <div class="flex flex-col justify-center bg-slate-900 px-6 h-16 rounded-xl border border-slate-700">
                 <label class="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Target Palette Size</label>
@@ -66,7 +66,7 @@
                 <span id="view-mode-label" class="text-[10px] font-bold uppercase">Processed</span>
             </button>
 
-            <button id="download-btn" class="h-16 rounded-xl bg-indigo-600 text-white font-black shadow-lg shadow-indigo-900/20 flex flex-col items-center justify-center hover:bg-indigo-500 active:scale-[0.98] transition-all">
+            <button id="download-btn" class="h-16 rounded-xl bg-indigo-600 text-white font-black shadow-lg shadow-indigo-900/20 flex flex-col items-center justify-center hover:bg-indigo-500 active:scale-[0.98] transition-all opacity-50 cursor-not-allowed pointer-events-none">
                 <span id="btn-sublabel" class="text-[9px] font-black uppercase tracking-[0.2em] text-indigo-200 mb-1">Export</span>
                 <span id="btn-label" class="text-[10px] font-bold uppercase">Download .h</span>
             </button>
@@ -168,7 +168,7 @@
         function setBtnState(state) {
             switch(state) {
                 case 'processing':
-                    downloadBtn.classList.add('opacity-50', 'pointer-events-none');
+                    downloadBtn.classList.add('opacity-50', 'pointer-events-none', 'cursor-wait');
                     btnSublabel.innerText = "System";
                     btnLabel.innerText = "Processing...";
                     break;
@@ -178,9 +178,13 @@
                     setTimeout(() => setBtnState('idle'), 2000);
                     break;
                 case 'idle':
-                    downloadBtn.classList.remove('opacity-50', 'pointer-events-none');
-                    btnSublabel.innerText = "Export";
-                    btnLabel.innerText = "Download .h";
+                    if (processedData) {
+                        downloadBtn.classList.remove('opacity-50', 'pointer-events-none', 'cursor-not-allowed');
+                        btnSublabel.innerText = "Export";
+                        btnLabel.innerText = "Download .h";
+                    } else {
+                        downloadBtn.classList.add('opacity-50', 'pointer-events-none', 'cursor-not-allowed');
+                    }
                     break;
             }
         }
@@ -209,11 +213,14 @@
             }
             
             setBtnState('idle');
+            previewCanvas.classList.remove('hidden');
+            document.getElementById('drop-content').classList.add('hidden');
             renderView();
         };
 
         document.getElementById('global-drop').onclick = (e) => { 
-            if(!e.target.closest('nav, #summary-bar, header, canvas')) fileInput.click(); 
+            // Avoid triggering file picker if clicking interactive elements
+            if(!e.target.closest('nav, #summary-bar, header, canvas, input, button')) fileInput.click(); 
         };
 
         fileInput.onchange = (e) => handleFile(e.target.files[0]);
@@ -228,21 +235,14 @@
 
         function handleFile(file) {
             if (!file?.type.startsWith('image/')) return;
-
-            // --- IMMEDIATE UI UPDATE ---
-            // Show bars and canvas right now, even before quantization starts
-            ['summary-bar', 'action-bar', 'preview-canvas'].forEach(id => document.getElementById(id).classList.remove('hidden'));
-            document.getElementById('drop-content').classList.add('hidden');
-            
             downloadName = file.name.split('.')[0].replace(/[^a-z0-9]/gi, '_');
             document.getElementById('info-filename').innerText = file.name;
-
             const img = new Image();
             img.onload = () => { 
                 originalImg = img; 
                 isInitialLoad = true;
-                palLimitInput.max = 256; 
-                palLimitInput.value = 256; 
+                palLimitInput.max = 256;
+                palLimitInput.value = 256;
                 processImage(img); 
             };
             img.src = URL.createObjectURL(file);
@@ -258,12 +258,6 @@
             const ctx = previewCanvas.getContext('2d');
             ctx.clearRect(0, 0, w, h);
             ctx.drawImage(img, 0, 0);
-            
-            // Draw original immediately so user sees SOMETHING while worker is thinking
-            if (isInitialLoad) {
-                renderView(); 
-            }
-
             const imageDataObj = ctx.getImageData(0, 0, w, h);
             
             const colors = new Set();
@@ -283,12 +277,12 @@
         }
 
         function renderView() {
+            if (!processedData) return;
             const ctx = previewCanvas.getContext('2d');
             ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
             
-            // If view is original OR if we haven't finished processing the worker yet
-            if (isViewOriginal || !processedData) { 
-                if (originalImg) ctx.drawImage(originalImg, 0, 0); 
+            if (isViewOriginal) { 
+                ctx.drawImage(originalImg, 0, 0); 
             } else {
                 const imgData = ctx.createImageData(previewCanvas.width, previewCanvas.height);
                 for(let i=0; i < processedData.indices.length; i++) {
@@ -309,6 +303,7 @@
         };
 
         downloadBtn.onclick = () => {
+            if (!finalHeader) return; // Guard clause
             const a = document.createElement('a');
             a.href = URL.createObjectURL(new Blob([finalHeader], { type: 'text/plain' }));
             a.download = `${downloadName}.h`;
